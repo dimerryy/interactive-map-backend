@@ -1,12 +1,12 @@
 package controllers
 
 import (
-	"bytes"
-	"encoding/json"
-	"fmt"
+	"context"
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
+	"github.com/sashabaranov/go-openai"
 )
 
 type AIRequest struct {
@@ -17,17 +17,6 @@ type AIResponse struct {
 	Description string `json:"description"`
 }
 
-// Structure of Ollama API request
-type OllamaRequest struct {
-	Model  string `json:"model"`
-	Prompt string `json:"prompt"`
-}
-
-// Structure of Ollama API response
-type OllamaResponse struct {
-	Response string `json:"response"`
-}
-
 func HandleAI(c *gin.Context) {
 	var req AIRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -35,32 +24,33 @@ func HandleAI(c *gin.Context) {
 		return
 	}
 
-	prompt := "Give a short 2-3 sentence description about the country " + req.CountryName + " suitable for travelers."
+	client := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
 
-	ollamaReq := OllamaRequest{
-		Model:  "llama3", // or "mistral", "phi", etc. depending on what you have downloaded
-		Prompt: prompt,
-	}
+	prompt := "Give a short 1-2 sentence description about the country " + req.CountryName + " suitable for travelers."
 
-	reqBody, err := json.Marshal(ollamaReq)
+	resp, err := client.CreateChatCompletion(
+		context.Background(),
+		openai.ChatCompletionRequest{
+			Model: openai.GPT3Dot5Turbo, // or GPT-4 if you want
+			Messages: []openai.ChatCompletionMessage{
+				{
+					Role:    openai.ChatMessageRoleSystem,
+					Content: "You are a helpful travel guide.",
+				},
+				{
+					Role:    openai.ChatMessageRoleUser,
+					Content: prompt,
+				},
+			},
+		},
+	)
+
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to build request"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch AI response"})
 		return
 	}
 
-	resp, err := http.Post("http://host.docker.internal:11434/api/generate", "application/json", bytes.NewBuffer(reqBody))
-	if err != nil {
-		fmt.Println(err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to contact AI model"})
-		return
-	}
-	defer resp.Body.Close()
+	answer := resp.Choices[0].Message.Content
 
-	var ollamaResp OllamaResponse
-	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse AI response"})
-		return
-	}
-
-	c.JSON(http.StatusOK, AIResponse{Description: ollamaResp.Response})
+	c.JSON(http.StatusOK, AIResponse{Description: answer})
 }
